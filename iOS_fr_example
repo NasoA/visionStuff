@@ -1,0 +1,102 @@
+import UIKit
+import AVFoundation
+import Vision
+import CoreML
+
+
+class FaceScannerViewController: UIViewController {
+
+    var captureSession: AVCaptureSession!
+    var previewLayer: AVCaptureVideoPreviewLayer!
+    var faceDetectionRequest: VNRequest!
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        captureSession = AVCaptureSession()
+        
+        // Set up camera input
+        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video) else {
+            print("Camera not available.")
+            return
+        }
+
+        let videoDeviceInput: AVCaptureDeviceInput
+        do {
+            videoDeviceInput = try AVCaptureDeviceInput(device: videoCaptureDevice)
+        } catch {
+            print("Failed to get video input device.")
+            return
+        }
+
+        if (captureSession.canAddInput(videoDeviceInput)) {
+            captureSession.addInput(videoDeviceInput)
+        } else {
+            print("Failed to add video input.")
+            return
+        }
+
+        // Set up preview layer
+        previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+        previewLayer.frame = view.layer.bounds
+        previewLayer.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(previewLayer)
+
+        // Start the capture session
+        captureSession.startRunning()
+
+        // Set up Vision face detection request
+        let faceDetectionRequest = VNDetectFaceRectanglesRequest(completionHandler: self.handleFaces)
+        self.faceDetectionRequest = faceDetectionRequest
+    }
+
+    // Handle face detection
+    func handleFaces(request: VNRequest, error: Error?) {
+        guard let observations = request.results as? [VNFaceObservation] else { return }
+        
+        for faceObservation in observations {
+            // You can extract face data such as bounding boxes, landmarks, etc.
+            let boundingBox = faceObservation.boundingBox
+            // Process the face data here (e.g., crop the image, extract features, etc.)
+            print("Detected face at: \(boundingBox)")
+            
+            // Optionally, send data to the backend
+            sendFaceDataToBackend(faceObservation: faceObservation)
+        }
+    }
+
+    // Send face data to the backend server
+    func sendFaceDataToBackend(faceObservation: VNFaceObservation) {
+        guard let url = URL(string: "https://your-backend-url.com/recognize") else { return }
+        
+        // Prepare the data to send (for example, face landmarks or image data)
+        let faceData = [
+            "boundingBox": [
+                "x": faceObservation.boundingBox.origin.x,
+                "y": faceObservation.boundingBox.origin.y,
+                "width": faceObservation.boundingBox.size.width,
+                "height": faceObservation.boundingBox.size.height
+            ]
+        ]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: faceData, options: [])
+        } catch {
+            print("Error serializing face data: \(error)")
+        }
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("Error sending data to backend: \(error)")
+                return
+            }
+            print("Successfully sent face data to backend.")
+        }
+        
+        task.resume()
+    }
+}
