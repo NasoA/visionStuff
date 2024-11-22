@@ -1,0 +1,98 @@
+from flask import Flask, request, jsonify
+from pymongo import MongoClient, ASCENDING
+import uuid
+import numpy as np
+import hashlib
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Connect to MongoDB (replace with your connection string)
+client = MongoClient("mongodb://localhost:27017/")
+db = client['facial_recognition']
+faces_collection = db['faces']
+
+# Ensure a unique index on face embeddings to avoid duplicates
+faces_collection.create_index([("face_embedding", ASCENDING)], unique=True)
+
+# Function to generate a unique token for each face
+def generate_unique_token():
+    return str(uuid.uuid4())
+
+# Function to compute a hash of the face embedding for uniqueness check
+def compute_embedding_hash(embedding):
+    # Use a hash function to ensure embeddings are compared uniquely
+    return hashlib.sha256(embedding.tobytes()).hexdigest()
+
+# Route to handle face recognition results
+@app.route('/recognize', methods=['POST'])
+def recognize_face():
+    data = request.json
+    
+    # Extract bounding box and face embedding from the request
+    bounding_box = data.get('boundingBox')
+    face_embedding = np.array(data.get('faceEmbedding'))  # Assume faceEmbedding is a list of float values
+    
+    if face_embedding is None:
+        return jsonify({"error": "No face embedding found in the request"}), 400
+
+    # Hash the face embedding to check if it's already stored
+    face_hash = compute_embedding_hash(face_embedding)
+
+    # Check if this face already exists in the database
+    existing_face = faces_collection.find_one({"face_hash": face_hash})
+    if existing_face:
+        return jsonify({
+            "status": "success",
+            "message": "Face already recognized",
+            "token": existing_face['token']
+        }), 200
+    
+    # Otherwise, create a new entry for this unique face
+    token = generate_unique_token()
+    
+    # Create the face document
+    face_document = {
+        "boundingBox": bounding_box,
+        "face_embedding": face_embedding.tolist(),  # Convert the numpy array to a list
+        "face_hash": face_hash,
+        "token": token,
+        "created_at": datetime.datetime.now()
+    }
+    
+    # Insert the new face record into the collection
+    try:
+        faces_collection.insert_one(face_document)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    return jsonify({
+        "status": "success",
+        "message": "Face recognized and stored",
+        "token": token
+    }), 201
+
+# Route to look up a face using the token
+@app.route('/lookup', methods=['GET'])
+def lookup_face():
+    token = request.args.get('token')
+    
+    if not token:
+        return jsonify({"error": "Token parameter is required"}), 400
+    
+    # Search for the face by token
+    face = faces_collection.find_one({"token": token})
+    
+    if not face:
+        return jsonify({"error": "Face not found for the provided token"}), 404
+    
+    return jsonify({
+        "status": "success",
+        "token": face['token'],
+        "boundingBox": face['boundingBox'],
+        "created_at": face['created_at']
+    }), 200
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
